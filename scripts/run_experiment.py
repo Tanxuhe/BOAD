@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 # 确保能找到 bo_core 包
-# 如果您安装了 pip install -e .，这一步其实不需要，但为了保险起见保留
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from bo_core.config_manager import FullConfig
@@ -35,7 +34,8 @@ def main():
     X_init = generate_lhs_samples(cfg.optimization.n_initial, cfg.problem.dim, bounds)
     Y_init = func(X_init).unsqueeze(-1)
     
-    if cfg.problem.device == "cuda" and torch.cuda.is_available():
+    # [修正点] device 属性位于 cfg.experiment 中，而非 cfg.problem
+    if cfg.experiment.device == "cuda" and torch.cuda.is_available():
         X_init = X_init.cuda()
         Y_init = Y_init.cuda()
         
