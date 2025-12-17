@@ -38,6 +38,10 @@ algorithm:
   # === 结构学习配置 ===
   decomposition_method: "friedman" # "shap" 或 "friedman"
   decomp_freq: 30                  # 结构学习频率 (每多少轮执行一次)
+
+  # 动态频率控制
+  decomp_loose_freq: 60            # Phase 2 频率 (不填则默认为 decomp_freq * 2)
+  decomp_switch_point: 150         # 在第几轮后切换到 Phase 2 (降低频率)
   
   # Friedman H-Statistic 高级参数 [新增]
   background_source: "data"        # "data" (使用观测数据积分) 或 "uniform" (使用网格积分)
