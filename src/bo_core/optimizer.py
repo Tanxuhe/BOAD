@@ -6,6 +6,9 @@ import numpy as np
 from tqdm import tqdm
 from typing import Callable, Optional
 
+# [修复点] 添加 gpytorch 导入
+import gpytorch 
+
 # --- Absolute Imports (Standardized) ---
 from bo_core.config_manager import FullConfig
 from bo_core.models.additive_gp import AdditiveStructureGP
