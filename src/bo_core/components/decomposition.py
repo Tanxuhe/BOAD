@@ -65,6 +65,7 @@ class SHAPDecompositionFinder(BaseDecompositionFinder):
     """
     def find(self) -> Tuple[List[List[int]], int]:
         model = clone(self.rf_model)
+        # SHAP 方法保留 DataFrame 训练，因为 TreeExplainer 对 DataFrame 支持较好
         model.fit(self.X_full, self.Y_full)
         
         try:
@@ -196,7 +197,10 @@ class FriedmanHDecompositionFinder(BaseDecompositionFinder):
         X_bg = self._get_background_data(rng)
         
         model = clone(self.rf_model)
-        model.fit(self.X_full, self.Y_full)
+        
+        # [关键修复] 这里使用 .values 传入 numpy array，防止 sklearn 记录 feature names
+        # 这样在后续 _compute_pdp_vectorized 中使用 numpy 预测时就不会报警告
+        model.fit(self.X_full.values, self.Y_full)
         
         # Centering for H-statistic assumption
         f_hat_raw = model.predict(X_t)
