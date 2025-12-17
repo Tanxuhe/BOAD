@@ -1,0 +1,53 @@
+# ==========================================
+# High-Dimensional BO Configuration Template
+# ==========================================
+
+experiment:
+  name: "Full_Feature_Test_100D"  # 实验名称 (结果将保存在 logs/<name>/)
+  seed: 2025                      # 全局随机种子
+  device: "cuda"                  # "cuda" or "cpu"
+
+problem:
+  name: "stybtang_nd"             # 测试函数名 (定义在 test_functions.py)
+  dim: 100                        # 总维度
+  bounds_low: [-5.0]              # 搜索下界
+  bounds_high: [5.0]              # 搜索上界
+  optimal_value: 3916.6           # (可选) 理论最优值，用于绘图参考
+  
+  # (可选) 函数包装器配置
+  # wrapper: "sparse"             
+  # params:
+  #   effective_dim: 20
+
+oracle:
+  # (可选) 理想结构对比实验配置
+  type: "sparse"                  # "block" (分块) 或 "sparse" (稀疏)
+  param: 100                      # block_size 或 effective_dim
+
+optimization:
+  n_initial: 20                   # 初始 LHS 采样点数
+  n_total: 300                    # 总迭代次数
+  switch_threshold: 50            # [关键] 多少轮后从 Standard BO 切换到 Adaptive BO
+  
+  # [新增] 强制冷启动间隔
+  # 每隔多少轮强制重训 GP 模型 (防止陷入局部最优)
+  # 设置为 -1 则仅在结构变化时冷启动
+  cold_start_interval: 10         
+
+algorithm:
+  # === 结构学习配置 ===
+  decomposition_method: "friedman" # "shap" 或 "friedman"
+  decomp_freq: 30                  # 结构学习频率 (每多少轮执行一次)
+  
+  # Friedman H-Statistic 高级参数 [新增]
+  background_source: "data"        # "data" (使用观测数据积分) 或 "uniform" (使用网格积分)
+  data_sample_ratio: 0.5           # 使用多少比例的历史数据作为背景集 (0.0 - 1.0)
+  grid_sample_count: 100           # 如果使用 uniform，生成多少个网格点
+  
+  # 阈值参数
+  interaction_threshold: 0.25      # 交互阈值 (越小越容易成组)
+  importance_threshold: 0.02       # 重要性阈值 (小于此值的变量视为无效)
+  
+  # === GP 模型与采集配置 ===
+  beta_scaling: 2.0                # UCB 探索系数
+  ls_prior: 0.5                    # Lengthscale Prior Mean (越小越适应陡峭函数)
