@@ -2,6 +2,7 @@ import torch
 import time
 import gc
 import pprint
+import numpy as np
 from tqdm import tqdm
 from typing import Callable, Optional
 
@@ -59,6 +60,16 @@ class AdaptiveBO:
         # 状态追踪
         self.decomp = decomposition
         self.unimp_idx = -1 # 默认初始无无效组
+        
+        # [Oracle Logic] 判断是否固定结构
+        # 如果配置中有 oracle 且 type 不为空，则认为是 Oracle 实验，不进行结构学习
+        self.fixed_decomp = (self.cfg.oracle is not None and self.cfg.oracle.type is not None)
+        if self.fixed_decomp:
+            self.logger.info(f"[Oracle] Decomposition is FIXED. Type: {self.cfg.oracle.type}")
+            # 如果是 sparse 结构，通常最后一个组是无效组
+            if self.cfg.oracle.type == 'sparse':
+                self.unimp_idx = len(self.decomp) - 1
+        
         self.model = None
         self.best_value_trace = []
         self._update_norm()
@@ -188,6 +199,52 @@ class AdaptiveBO:
         self.logger.info("   [Model] Cold start completed.")
         self._log_model_diagnostics()
 
+    def _run_standard_bo_step(self):
+        """
+        [Standard BO Implementation]
+        使用全维度 GP + UCB 进行一轮标准贝叶斯优化。
+        """
+        # 1. 准备数据
+        valid_mask = torch.isfinite(self.Y_train)
+        train_x = self.X_train[valid_mask]
+        train_y = self.Y_train[valid_mask]
+
+        # 归一化 X [0, 1]
+        train_x_norm = normalize(train_x, self.bounds)
+        
+        # 标准化 Y (Mean 0, Std 1)
+        y_std_val = train_y.std()
+        if y_std_val < 1e-9: y_std_val = 1.0
+        train_y_std = (train_y - train_y.mean()) / y_std_val
+        if train_y_std.dim() == 1: train_y_std = train_y_std.unsqueeze(-1)
+            
+        # 2. 训练 Standard GP (使用 BoTorch SingleTaskGP)
+        model = SingleTaskGP(train_x_norm, train_y_std)
+        mll = ExactMarginalLogLikelihood(model.likelihood, model)
+        fit_gpytorch_mll(mll)
+        
+        # 3. 采集 (UCB)
+        beta = 2.0 * np.log(2 * (train_x.size(0) + 2))
+        acq = UpperConfidenceBound(model, beta=beta)
+        
+        # 4. 优化采集函数
+        candidates, _ = optimize_acqf(
+            acq, 
+            bounds=torch.tensor([[0.0]*self.dim, [1.0]*self.dim], device=self.device, dtype=self.dtype),
+            q=1, 
+            num_restarts=10, 
+            raw_samples=512
+        )
+        
+        # 5. 清理显存
+        del model
+        del acq
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # 反归一化回原始空间
+        return unnormalize(candidates, self.bounds)
+
     def _create_batch_kernel_from_base(self, group_indices, dim_size, batch_shape):
         """[修复] 维度对齐与一致性 Bug Fix"""
         template_scale = self.model.covar_module.kernels[group_indices[0]]
@@ -216,13 +273,25 @@ class AdaptiveBO:
         return new_scale.to(self.device, self.dtype)
 
     def _get_next_query_point_custom(self, iteration):
-        # ... (Precompute matrices logic inline for brevity or reuse _precompute method) ...
+        # 预计算矩阵
         self.model.eval()
         X_tr, Y_tr = self.model.train_inputs[0], self.model.train_targets
         with torch.no_grad():
             K = self.model.covar_module(X_tr).evaluate()
             noise = self.model.likelihood.noise
-            L = torch.linalg.cholesky(K + torch.eye(K.size(0), device=self.device) * (noise + 1e-4))
+            eye = torch.eye(K.size(0), device=self.device)
+            # 增加一点 jitter 保证分解稳定
+            L = None
+            for jit in [1e-6, 1e-5, 1e-4, 1e-3, 1e-2]:
+                try: 
+                    L = torch.linalg.cholesky(K + eye * (noise + jit))
+                    break
+                except: continue
+            
+            if L is None:
+                # Fallback: Diagonal approximation
+                L = torch.eye(K.size(0), device=self.device) * torch.sqrt(noise + K.diag().mean())
+                
             alpha = torch.cholesky_solve(Y_tr.unsqueeze(1), L)
         
         matrices = {'L': L, 'alpha': alpha}
@@ -236,6 +305,7 @@ class AdaptiveBO:
         
         for i, dec in enumerate(self.decomp):
             is_unimp = (i == self.unimp_idx)
+            # 对于极小 Outputscale 的无效组，直接使用随机搜索
             if is_unimp and sub_kernels[i].outputscale.item() < 0.05:
                 random_groups.append(dec)
             else:
@@ -247,6 +317,7 @@ class AdaptiveBO:
             
         # Parallel Opt
         num_groups = len(self.decomp)
+        # Beta 缩放：如果组很多，适当降低每个组的 beta，防止过度探索
         scaled_beta = self.cfg.algorithm.beta_scaling / (np.sqrt(num_groups) if num_groups > 0 else 1.0)
         
         for dim_size, group_info in buckets.items():
@@ -257,6 +328,7 @@ class AdaptiveBO:
             x_slices = [X_tr[:, dims] for dims in dims_list]
             train_x_batch = torch.stack(x_slices, dim=0)
             
+            # 使用动态核函数修复 Bug
             batch_kernel = self._create_batch_kernel_from_base(indices, dim_size, [batch_size])
             bounds_sub = torch.tensor([[0.0]*dim_size, [1.0]*dim_size], device=self.device, dtype=self.dtype)
             
@@ -283,18 +355,18 @@ class AdaptiveBO:
             phase = "StdBO" if i < self.cfg.optimization.switch_threshold else "AdaptBO"
             
             try:
+                # [Standard BO Logic Implemented]
                 if phase == "StdBO":
-                    # Standard BO (Simplified for brevity, use SingleTaskGP)
-                    # Note: In real implementation, insert Standard BO logic here 
-                    # For now, let's assume random if not implemented, or copy from previous bo_optimizer.py
-                    X_next = torch.rand((1, self.dim), device=self.device, dtype=self.dtype) * self.x_range + self.x_min
+                    X_next = self._run_standard_bo_step()
                 else:
                     # Adaptive Phase
                     steps = i - self.cfg.optimization.switch_threshold
                     
-                    # A. 结构学习
+                    # A. 结构学习 (Oracle 模式下跳过)
                     updated = False
-                    if self.freq_scheduler.check_trigger(steps):
+                    
+                    # [Oracle Logic] 增加 fixed_decomp 判断
+                    if not self.fixed_decomp and self.freq_scheduler.check_trigger(steps):
                         self.logger.info(f"[Decomp] Running {self.cfg.algorithm.decomposition_method}...")
                         
                         # Clean Memory before heavy computation
@@ -319,10 +391,13 @@ class AdaptiveBO:
                         )
                         self.decomp, self.unimp_idx = finder.find()
                         updated = True
+                        
+                        # 日志记录 (略微简化展示，完整逻辑同前)
                         self.logger.info(f"[Decomp] Found {len(self.decomp)} groups.")
                     
                     # B. 训练模型 (决策: 冷启动 vs 热启动)
                     cold_interval = self.cfg.optimization.cold_start_interval
+                    # 结构更新了 OR 模型没了 OR 到了冷启动周期 -> 必须冷启动
                     need_cold = updated or (self.model is None) or (cold_interval > 0 and i % cold_interval == 0)
                     
                     self._create_and_train_model(is_warm_start=not need_cold)
