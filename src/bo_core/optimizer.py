@@ -79,13 +79,21 @@ class AdaptiveBO:
         self._update_trace()
 
         # 调度器
+        initial_freq = config.algorithm.decomp_freq
+        loose_freq = config.algorithm.decomp_loose_freq
+        if loose_freq is None:
+            loose_freq = int(initial_freq * 2)
+            
+        switch_point = config.algorithm.decomp_switch_point
+
         self.freq_scheduler = AdaptiveFrequencyScheduler(
-            initial_freq=config.algorithm.decomp_freq,
-            loose_freq=config.algorithm.decomp_freq * 2,
-            switch_point=150
+            initial_freq=initial_freq,
+            loose_freq=loose_freq,
+            switch_point=switch_point
         )
         
         self.logger.info(f"Initialized AdaptiveBO with dim={self.dim}, device={self.device}")
+        self.logger.info(f"[Scheduler] Freq: {initial_freq} -> {loose_freq} after iter {switch_point}")
 
     def _update_trace(self):
         valid_y = self.Y_train[torch.isfinite(self.Y_train)]
