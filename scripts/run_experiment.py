@@ -9,7 +9,8 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from bo_core.config_manager import FullConfig
 from bo_core.optimizer import AdaptiveBO
-from bo_core.utils import setup_seed, generate_lhs_samples, generate_oracle_decomposition
+# [修正] 引入 setup_experiment_dir
+from bo_core.utils import setup_seed, generate_lhs_samples, generate_oracle_decomposition, setup_experiment_dir
 from bo_core.test_functions import get_function
 
 def main():
@@ -34,7 +35,6 @@ def main():
     X_init = generate_lhs_samples(cfg.optimization.n_initial, cfg.problem.dim, bounds)
     Y_init = func(X_init).unsqueeze(-1)
     
-    # [修正点] device 属性位于 cfg.experiment 中，而非 cfg.problem
     if cfg.experiment.device == "cuda" and torch.cuda.is_available():
         X_init = X_init.cuda()
         Y_init = Y_init.cuda()
@@ -44,11 +44,14 @@ def main():
         print(f"Using Oracle Decomposition: {cfg.oracle.type}")
         decomp = generate_oracle_decomposition(cfg.problem.dim, cfg.oracle.type, cfg.oracle.param)
     else:
-        # Default: start with all-in-one group or one-by-one? 
-        # Usually start with full dim group until first structure learning
         decomp = [list(range(cfg.problem.dim))]
 
-    # 6. Initialize Optimizer
+    # [修正] 6. Setup Output Directory (确保目录存在)
+    # 这会在 logs/ 下创建对应的实验文件夹
+    exp_dir = setup_experiment_dir(cfg.experiment.name)
+    print(f"Experiment output directory: {exp_dir}")
+
+    # 7. Initialize Optimizer
     optimizer = AdaptiveBO(
         config=cfg,
         X_init=X_init,
@@ -56,10 +59,10 @@ def main():
         bounds=bounds,
         func=func,
         decomposition=decomp,
-        output_dir=f"logs/{cfg.experiment.name}"
+        output_dir=exp_dir # 传入创建好的绝对路径/相对路径
     )
     
-    # 7. Run
+    # 8. Run
     optimizer.optimize()
 
 if __name__ == "__main__":
