@@ -1,0 +1,12 @@
+torch>=2.0.0
+gpytorch>=1.11
+botorch>=0.9.0
+numpy>=1.24
+scipy
+pandas
+matplotlib
+tqdm
+pyyaml
+scikit-learn
+networkx
+shap
