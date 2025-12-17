@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 from typing import Callable, Optional
 
-# [修复点] 添加 gpytorch 导入
+# [关键] 导入 gpytorch 防止 NameError
 import gpytorch 
 
 # --- Absolute Imports (Standardized) ---
@@ -82,7 +82,6 @@ class AdaptiveBO:
         self._update_trace()
 
         # 调度器
-        # 读取配置中的频率设置
         initial_freq = config.algorithm.decomp_freq
         loose_freq = config.algorithm.decomp_loose_freq
         if loose_freq is None:
@@ -203,7 +202,7 @@ class AdaptiveBO:
         self._log_model_diagnostics()
 
     def _run_standard_bo_step(self):
-        # [修正] 确保 mask 是 1D 的 (N,)，以匹配 X_train 的第一维
+        # 确保 mask 是 1D 的 (N,)，以匹配 X_train 的第一维
         valid_mask = torch.isfinite(self.Y_train).view(-1)
         
         train_x = self.X_train[valid_mask]
@@ -214,7 +213,6 @@ class AdaptiveBO:
         y_std_val = train_y.std()
         if y_std_val < 1e-9: y_std_val = 1.0
         train_y_std = (train_y - train_y.mean()) / y_std_val
-        # 确保 SingleTaskGP 接收正确的维度 (N, 1)
         if train_y_std.dim() == 1: train_y_std = train_y_std.unsqueeze(-1)
             
         model = SingleTaskGP(train_x_norm, train_y_std)
@@ -288,7 +286,8 @@ class AdaptiveBO:
                 buckets[len(dec)].append((i, dec))
         
         for dec in random_groups:
-            X_next_norm[:, dec] = torch.rand((1, len(dec)), device=self.device)
+            # [修正点 1] 添加 dtype=self.dtype 防止类型不匹配
+            X_next_norm[:, dec] = torch.rand((1, len(dec)), device=self.device, dtype=self.dtype)
             
         num_groups = len(self.decomp)
         scaled_beta = self.cfg.algorithm.beta_scaling / (np.sqrt(num_groups) if num_groups > 0 else 1.0)
@@ -372,7 +371,7 @@ class AdaptiveBO:
                 # Evaluation
                 if not isinstance(X_next, torch.Tensor): X_next = torch.tensor(X_next, device=self.device)
                 
-                # [修正] 确保 Y_next 是 2D (1, 1)，以匹配 Y_train
+                # 确保 Y_next 是 2D (1, 1)，以匹配 Y_train
                 Y_next = self.func(X_next).reshape(1, 1).to(self.device)
                 
                 # Update
@@ -386,8 +385,7 @@ class AdaptiveBO:
                 # Regret 计算与记录
                 regret_val = None
                 if self.optimal_value is not None:
-                    # Regret = Optimal - Current Best (Assuming maximization of negative function or standard maximization)
-                    # 这里的最佳值通常越大越好 (例如 0 是最大值，当前是 -10，Regret=10)
+                    # Regret = Optimal - Current Best (Assuming maximization)
                     regret_val = self.optimal_value - cur_best
                 
                 self.json_logger.log({
@@ -407,8 +405,8 @@ class AdaptiveBO:
             except Exception as e:
                 self.logger.error(f"Error at {i}: {e}")
                 gc.collect()
-                # Fail-safe random
-                X_next = torch.rand((1, self.dim), device=self.device) * self.x_range + self.x_min
+                # [修正点 2] Fail-safe 随机生成也需要指定 dtype
+                X_next = torch.rand((1, self.dim), device=self.device, dtype=self.dtype) * self.x_range + self.x_min
                 self.X_train = torch.cat([self.X_train, X_next], dim=0)
-                # [修正] 兜底数据也必须是 (1, 1)
-                self.Y_train = torch.cat([self.Y_train, torch.tensor([[-100.0]], device=self.device)], dim=0)
+                # 兜底数据也必须是 (1, 1)
+                self.Y_train = torch.cat([self.Y_train, torch.tensor([[-100.0]], device=self.device, dtype=self.dtype)], dim=0)
