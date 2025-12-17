@@ -160,9 +160,10 @@ bo_project/
 │   └── plot_results.py      # 绘图工具
 └── src/
     └── bo_core/             # 核心代码包
-        ├── optimizer.py     # AdaptiveBO 主逻辑 (含冷热启动、显存管理)
+        ├── optimizer.py     # AdaptiveBO 主逻辑
         ├── config_manager.py# 配置解析器
-        ├── test_functions.py# 测试函数库 (Stybtang, Rosenbrock, etc.)
+        ├── test_functions.py# 测试函数库
+        ├── utils.py         # [遗漏补充] 通用工具 (日志、Seed、频率调度等)
         ├── components/
         │   ├── decomposition.py # 结构学习 (SHAP/Friedman)
         │   ├── acquisition.py   # 并行采集函数优化
