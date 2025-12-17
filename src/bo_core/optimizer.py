@@ -57,7 +57,7 @@ class AdaptiveBO:
         self.X_train = X_init.to(self.device, self.dtype)
         self.Y_train = Y_init.to(self.device, self.dtype)
         
-        # [新增] 读取理论最优值用于计算 Regret
+        # 读取理论最优值用于计算 Regret
         self.optimal_value = config.problem.optimal_value
         if self.optimal_value is None:
             self.logger.warning("No optimal_value provided in config. Regret cannot be calculated.")
@@ -79,11 +79,11 @@ class AdaptiveBO:
         self._update_trace()
 
         # 调度器
+        # 读取配置中的频率设置
         initial_freq = config.algorithm.decomp_freq
         loose_freq = config.algorithm.decomp_loose_freq
         if loose_freq is None:
             loose_freq = int(initial_freq * 2)
-            
         switch_point = config.algorithm.decomp_switch_point
 
         self.freq_scheduler = AdaptiveFrequencyScheduler(
@@ -200,14 +200,18 @@ class AdaptiveBO:
         self._log_model_diagnostics()
 
     def _run_standard_bo_step(self):
-        valid_mask = torch.isfinite(self.Y_train)
+        # [修正] 确保 mask 是 1D 的 (N,)，以匹配 X_train 的第一维
+        valid_mask = torch.isfinite(self.Y_train).view(-1)
+        
         train_x = self.X_train[valid_mask]
         train_y = self.Y_train[valid_mask]
+        
         train_x_norm = normalize(train_x, self.bounds)
         
         y_std_val = train_y.std()
         if y_std_val < 1e-9: y_std_val = 1.0
         train_y_std = (train_y - train_y.mean()) / y_std_val
+        # 确保 SingleTaskGP 接收正确的维度 (N, 1)
         if train_y_std.dim() == 1: train_y_std = train_y_std.unsqueeze(-1)
             
         model = SingleTaskGP(train_x_norm, train_y_std)
@@ -362,9 +366,13 @@ class AdaptiveBO:
                     self._create_and_train_model(is_warm_start=not need_cold)
                     X_next = self._get_next_query_point_custom(i)
                 
+                # Evaluation
                 if not isinstance(X_next, torch.Tensor): X_next = torch.tensor(X_next, device=self.device)
-                Y_next = self.func(X_next).reshape(1).to(self.device)
                 
+                # [修正] 确保 Y_next 是 2D (1, 1)，以匹配 Y_train
+                Y_next = self.func(X_next).reshape(1, 1).to(self.device)
+                
+                # Update
                 self.X_train = torch.cat([self.X_train, X_next], dim=0)
                 self.Y_train = torch.cat([self.Y_train, Y_next], dim=0)
                 self._update_norm()
@@ -372,19 +380,19 @@ class AdaptiveBO:
                 
                 cur_best = self.best_value_trace[-1]
                 
-                # === [新增] Regret 计算与记录 ===
+                # Regret 计算与记录
                 regret_val = None
                 if self.optimal_value is not None:
-                    # 假设是最大化问题：Regret = Optimal - Current Best
+                    # Regret = Optimal - Current Best (Assuming maximization of negative function or standard maximization)
+                    # 这里的最佳值通常越大越好 (例如 0 是最大值，当前是 -10，Regret=10)
                     regret_val = self.optimal_value - cur_best
                 
-                # 记录到 JSONL
                 self.json_logger.log({
                     "iter": i, 
                     "phase": phase, 
                     "y_new": Y_next.item(), 
                     "y_best": cur_best,
-                    "regret": regret_val  # 可能为 None
+                    "regret": regret_val
                 })
                 
                 log_str = f"Best: {cur_best:.4f}"
@@ -396,6 +404,8 @@ class AdaptiveBO:
             except Exception as e:
                 self.logger.error(f"Error at {i}: {e}")
                 gc.collect()
+                # Fail-safe random
                 X_next = torch.rand((1, self.dim), device=self.device) * self.x_range + self.x_min
                 self.X_train = torch.cat([self.X_train, X_next], dim=0)
-                self.Y_train = torch.cat([self.Y_train, torch.tensor([-100.0], device=self.device)], dim=0)
+                # [修正] 兜底数据也必须是 (1, 1)
+                self.Y_train = torch.cat([self.Y_train, torch.tensor([[-100.0]], device=self.device)], dim=0)
