@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bo_core"
+version = "0.1.0"
+description = "High-Dimensional Bayesian Optimization with Additive Structure Learning"
+authors = [
+  { name="Author Name", email="author@example.com" },
+]
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "torch>=2.0.0",
+    "gpytorch>=1.11",
+    "botorch>=0.9.0",
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "tqdm",
+    "pyyaml",
+    "scikit-learn",
+    "networkx",
+    "shap",
+    # "lightgbm", # 可选
+    # "pyartemis", # 可选
+]
+
+[project.urls]
+"Homepage" = "https://github.com/yourusername/bo_project"
