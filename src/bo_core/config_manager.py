@@ -34,10 +34,16 @@ class OptimizationConfig:
 
 @dataclass
 class AlgorithmConfig:
-    decomposition_method: str = "shap" # "shap" or "friedman"
+    decomposition_method: str = "shap" 
     decomp_freq: int = 20
     
-    # [新增] Friedman H-stat 参数
+    # [新增] 频率调度参数
+    # 如果为 None，代码中会自动设为 decomp_freq * 2
+    decomp_loose_freq: Optional[int] = None 
+    # 切换到宽松频率的迭代轮数
+    decomp_switch_point: int = 150          
+    
+    # ... (其他参数保持不变)
     background_source: str = "data"
     data_sample_ratio: float = 0.5
     grid_sample_count: int = 100
@@ -45,7 +51,7 @@ class AlgorithmConfig:
     interaction_threshold: float = 0.25
     importance_threshold: float = 0.02
     
-    beta_scaling: float = 2.0
+    beta_scaling: float = 0.75
     ls_prior: float = 0.5
 
 @dataclass
