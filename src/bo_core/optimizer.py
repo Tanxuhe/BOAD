@@ -139,10 +139,10 @@ class AdaptiveBO:
         mll = ExactMarginalLogLikelihood(self.model.likelihood, self.model)
         
         N = self.X_train.size(0)
-        base_iter = 100 if N < 50 else (150 if N < 150 else 250)
-        max_iter = int(base_iter * 0.4) if is_warm_start else base_iter
+        base_iter = 150 if N < 50 else (250 if N < 150 else 300)
+        max_iter = int(base_iter * 0.6) if is_warm_start else base_iter
         
-        patience = 15
+        patience = 25
         best_loss = float('inf')
         no_improv = 0
         
@@ -187,7 +187,7 @@ class AdaptiveBO:
             torch.cuda.empty_cache()
 
         likelihood = gpytorch.likelihoods.GaussianLikelihood(
-            noise_prior=gpytorch.priors.GammaPrior(1.1, 0.05)
+            noise_prior=gpytorch.priors.GammaPrior(1.1, 20)
         ).to(device=self.device, dtype=self.dtype)
         
         self.model = AdditiveStructureGP(
