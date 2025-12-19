@@ -16,7 +16,6 @@ from bo_core.components.decomposition import SHAPDecompositionFinder, FriedmanHD
 from bo_core.utils import (
     setup_logger, JSONLLogger, AdaptiveFrequencyScheduler, expand_tensor
 )
-# [新增] 引入 Task 基类
 from bo_core.tasks.base import BaseTask
 
 # --- BoTorch / GPyTorch ---
@@ -32,47 +31,36 @@ class AdaptiveBO:
     def __init__(
         self,
         config: FullConfig,
-        task: BaseTask,  # [修改] 接收 Task 对象
+        task: BaseTask,
         X_init: torch.Tensor,
         Y_init: torch.Tensor,
         decomposition: list,
         output_dir: str
     ):
-        """
-        初始化 AdaptiveBO
-        """
         self.cfg = config
-        self.task = task  # [新增] 保存 Task
+        self.task = task
         self.device = torch.device(config.experiment.device)
         self.dtype = torch.double
         self.exp_dir = output_dir
         
-        # 日志系统
         self.logger = setup_logger(self.exp_dir)
         self.json_logger = JSONLLogger(self.exp_dir)
         
-        # [修改] 从 Task 获取基础信息
-        # 兼容旧代码：self.func 指向 task.evaluate
         self.func = task.evaluate
         self.bounds = task.bounds.to(self.device, self.dtype)
-        
-        # 搜索空间通常在 [0, 1]，所以 x_min=0, x_range=1
         self.x_min, self.x_range = self.bounds[0], self.bounds[1] - self.bounds[0]
         self.dim = task.dim
         
         self.X_train = X_init.to(self.device, self.dtype)
         self.Y_train = Y_init.to(self.device, self.dtype)
         
-        # [修改] 从 Task 获取最优值
         self.optimal_value = task.get_optimal_value()
         if self.optimal_value is None:
             self.logger.warning("No optimal_value provided. Regret cannot be calculated.")
         
-        # 状态追踪
         self.decomp = decomposition
         self.unimp_idx = -1 
         
-        # Oracle Logic
         self.fixed_decomp = (self.cfg.oracle is not None and self.cfg.oracle.type is not None)
         if self.fixed_decomp:
             self.logger.info(f"[Oracle] Decomposition is FIXED. Type: {self.cfg.oracle.type}")
@@ -84,7 +72,6 @@ class AdaptiveBO:
         self._update_norm()
         self._update_trace()
 
-        # 调度器
         initial_freq = config.algorithm.decomp_freq
         loose_freq = config.algorithm.decomp_loose_freq
         if loose_freq is None:
@@ -166,24 +153,21 @@ class AdaptiveBO:
         Y_norm = (self.Y_train - self.y_mean) / self.y_std
         if Y_norm.dim() == 2: Y_norm = Y_norm.squeeze(-1)
         
-        # 尝试热启动
         if is_warm_start and self.model is not None:
             try:
                 self.model.set_train_data(inputs=X_norm, targets=Y_norm, strict=False)
                 self._train_model_adam(is_warm_start=True)
-                # self.logger.info("   [Model] Warm start completed.")
                 return
             except Exception:
                 self.logger.warning("   [Model] Warm start failed, falling back.")
         
-        # 冷启动
         if self.model is not None:
             del self.model
             gc.collect()
             torch.cuda.empty_cache()
 
-        # [修正 1] 噪声先验调整: Mean = 1.1 / 20.0 = 0.055
-        # 适应归一化后的数据 (Signal Variance ~ 1.0)
+        # [修复] 修正噪声先验，使其适应归一化后的数据 (Signal Var ~ 1.0)
+        # Mean = 1.1 / 20.0 = 0.055
         likelihood = gpytorch.likelihoods.GaussianLikelihood(
             noise_prior=gpytorch.priors.GammaPrior(1.1, 20.0)
         ).to(device=self.device, dtype=self.dtype)
@@ -210,7 +194,13 @@ class AdaptiveBO:
         train_y_std = (train_y - train_y.mean()) / y_std_val
         if train_y_std.dim() == 1: train_y_std = train_y_std.unsqueeze(-1)
             
-        model = SingleTaskGP(train_x_norm, train_y_std)
+        # [修复] 高维预热阶段强制使用 Isotropic Kernel (ARD=False)
+        # 避免 20 个样本拟合 388 个参数导致模型崩溃
+        covar_module = ScaleKernel(
+            MaternKernel(nu=2.5, ard_num_dims=None) # None = Isotropic
+        )
+        
+        model = SingleTaskGP(train_x_norm, train_y_std, covar_module=covar_module)
         mll = ExactMarginalLogLikelihood(model.likelihood, model)
         fit_gpytorch_mll(mll)
         
@@ -226,7 +216,6 @@ class AdaptiveBO:
         return unnormalize(candidates, self.bounds)
 
     def _create_batch_kernel_from_base(self, group_indices, dim_size, batch_shape):
-        # ... (保持原逻辑不变) ...
         template_scale = self.model.covar_module.kernels[group_indices[0]]
         template_base = template_scale.base_kernel
         sub_kernels = self.model.covar_module.kernels
@@ -262,10 +251,9 @@ class AdaptiveBO:
                     break
                 except: continue
             
-            # [修正 2] 失败保护：如果 Cholesky 失败，抛出错误让外层进行随机采样
-            # 这里的单位矩阵近似太粗糙，不如直接 Random Search
+            # [修复] 如果 Cholesky 失败，抛出异常触发 Fail-safe
             if L is None:
-                raise RuntimeError("Cholesky decomposition failed even with jitter.")
+                raise RuntimeError("Cholesky decomposition failed.")
                 
             alpha = torch.cholesky_solve(Y_tr.unsqueeze(1), L)
         
@@ -279,8 +267,7 @@ class AdaptiveBO:
         
         for i, dec in enumerate(self.decomp):
             is_unimp = (i == self.unimp_idx)
-            # [修正 3] 放宽阈值，避免过度随机
-            # 只有当 outputscale 极小 (<1e-4) 时才认为是死变量
+            # 放宽阈值: outputscale < 1e-4 视为无效
             if is_unimp and sub_kernels[i].outputscale.item() < 1e-4:
                 random_groups.append(dec)
             else:
@@ -316,7 +303,6 @@ class AdaptiveBO:
     def optimize(self):
         """主优化循环"""
         self.logger.info(f"=== Optimization Started: {self.cfg.experiment.name} ===")
-        # [修改] 起始点应该是当前 X_train 的数量 (可能是 n_initial)
         start_iter = self.X_train.size(0)
         pbar = tqdm(range(start_iter, self.cfg.optimization.n_total))
         
@@ -354,7 +340,6 @@ class AdaptiveBO:
                         self.decomp, self.unimp_idx = finder.find()
                         updated = True
                         
-                        # Logging structure
                         effective_groups = [sorted(g) for idx, g in enumerate(self.decomp) if idx != self.unimp_idx]
                         effective_groups.sort(key=lambda x: x[0] if x else 0)
                         self.json_logger.log({
@@ -369,8 +354,6 @@ class AdaptiveBO:
                 
                 # Evaluation
                 if not isinstance(X_next, torch.Tensor): X_next = torch.tensor(X_next, device=self.device)
-                
-                # [修改] 使用 task.evaluate 进行评估
                 Y_next = self.func(X_next).reshape(1, 1).to(self.device)
                 
                 # Update Data
@@ -403,17 +386,29 @@ class AdaptiveBO:
                 self.logger.error(f"Error at {i}: {e}")
                 gc.collect()
                 
-                # [修正 4] 异常处理的正确姿势：随机采样但必须真实评估
+                # [修复] 异常处理逻辑完善：必须记录日志，保持索引对齐
                 self.logger.info("   [Fail-safe] Performing random search step.")
                 X_next = torch.rand((1, self.dim), device=self.device, dtype=self.dtype) * self.x_range + self.x_min
                 
                 try:
+                    # 必须真实评估
                     Y_next = self.func(X_next).reshape(1, 1).to(self.device)
                     self.X_train = torch.cat([self.X_train, X_next], dim=0)
                     self.Y_train = torch.cat([self.Y_train, Y_next], dim=0)
                     self._update_norm()
                     self._update_trace()
+                    
+                    cur_best = self.best_value_trace[-1]
+                    
+                    # [关键修复] 写入日志，防止数据断层
+                    self.json_logger.log({
+                        "iter": i, 
+                        "phase": "FailSafe", 
+                        "y_new": Y_next.item(), 
+                        "y_best": cur_best,
+                        "regret": None # 出错时不强求计算 Regret
+                    })
+                    
                 except Exception as eval_e:
                     self.logger.error(f"   [Fatal] Function evaluation failed during fail-safe: {eval_e}")
-                    # 如果连 evaluation 都挂了，通常意味着外部程序崩了，跳过此轮
                     continue
