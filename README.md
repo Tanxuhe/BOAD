@@ -1,7 +1,3 @@
-好的，为了方便你直接复制和创建文件，这里将完整的使用说明整理为一个独立的 Markdown 代码块。你可以直接将其保存为项目的 README.md 文件。
-
-Markdown
-
 # High-Dimensional BO with Task Adapters (1220 Version)
 
 本项目基于 BOAD 框架（High-Dimensional Bayesian Optimization with Additive Structure Learning），新增了对多种实际高维任务（Rover Trajectory, MIP, NAS, Lasso/SVM）的原生支持。所有任务通过统一的 `Task Adapter` 接口进行管理，支持在离线或受限网络环境下运行。
