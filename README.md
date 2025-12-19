@@ -1,186 +1,137 @@
-High-Dimensional Bayesian Optimization with Additive Structure Learning (BOAD)
-BOAD 是一个用于解决高维黑盒优化问题的贝叶斯优化框架。它通过自动发现目标函数内部的加性结构（Additive Structure），将高维问题分解为多个低维子问题进行并行求解，从而显著提升搜索效率。
+好的，为了方便你直接复制和创建文件，这里将完整的使用说明整理为一个独立的 Markdown 代码块。你可以直接将其保存为项目的 README.md 文件。
 
-本项目集成了多种先进特性，包括基于 SHAP 和 Friedman H-Statistic 的结构学习算法、智能冷热启动策略（Cold/Warm Start）、以及完善的 Regret 追踪与可视化系统。
+Markdown
 
-🚀 主要特性 (Features)
-自适应结构学习：支持 SHAP (基于树解释器) 和 Friedman H-Statistic (基于偏依赖) 两种方法自动发现变量分组。
+# High-Dimensional BO with Task Adapters (1220 Version)
 
-双阶段优化策略：
+本项目基于 BOAD 框架（High-Dimensional Bayesian Optimization with Additive Structure Learning），新增了对多种实际高维任务（Rover Trajectory, MIP, NAS, Lasso/SVM）的原生支持。所有任务通过统一的 `Task Adapter` 接口进行管理，支持在离线或受限网络环境下运行。
 
-Phase 1 (Standard BO): 全维探索，积累初始数据。
+## 1. 环境安装 (Installation)
 
-Phase 2 (Adaptive BO): 基于学习到的结构，在低维子空间并行采集。
+由于服务器可能无法访问 GitHub，建议使用清华源进行安装。
 
-Oracle 实验支持：支持注入“上帝视角”的已知结构（如 Block 或 Sparse），用于评估结构学习算法的准确性上限。
-
-工程化保障：
-
-显存防泄漏：自动管理 GPU 显存，支持长期稳定运行。
-
-维度对齐修复：动态克隆核函数，确保并行采集时的数学一致性。
-
-智能热启动：在结构未变时微调旧模型，大幅提升迭代速度。
-
-完备的监控：自动记录 Simple Regret，支持多 Seed 实验的自动聚合与绘图。
-
-🛠️ 安装指南 (Installation)
-本项目采用标准的 Python 包结构 (src/ 模式)，建议使用 pip 进行安装。
-
-1. 环境准备
-Python >= 3.8
-
-CUDA (推荐，用于 GPU 加速)
-
-2. 安装步骤
+### 1.1 基础依赖
 在项目根目录下运行：
+```bash
+pip install -r requirements.txt -i [https://pypi.tuna.tsinghua.edu.cn/simple](https://pypi.tuna.tsinghua.edu.cn/simple)
+1.2 任务特定依赖 (按需安装)
+A. NAS-Bench-201 (用于 NAS 架构搜索任务)
 
-```Bash
-# 1. 安装依赖库
-pip install -r requirements.txt
+Bash
 
-# 2. 以开发者模式安装本项目 (Editable install)
-# 这样您可以随时修改代码而无需重新安装
-pip install -e .
-```
+pip install nas-bench-201 -i [https://pypi.tuna.tsinghua.edu.cn/simple](https://pypi.tuna.tsinghua.edu.cn/simple)
+重要提示：代码库安装后，必须手动下载数据库文件 NAS-Bench-201-v1_1-096897.pth (约 2GB)，并上传到项目的 data/ 目录下。
 
-🏃‍♂️ 快速开始 (Quick Start)
-1. 运行单次实验
-使用 scripts/run_experiment.py 脚本，并指定一个配置文件：
+B. PySCIPOpt (用于 MIP 求解任务) MIP 任务依赖 SCIP 求解器。请确保系统层已安装 SCIP Suite，然后安装 Python 接口：
 
-```Bash
-python scripts/run_experiment.py --config configs/template_full.yaml
-```
-运行后，结果将保存在 logs/ 目录下，例如 logs/Full_Feature_Test_100D/。
+Bash
 
-2. 配置文件详解
-配置文件 (yaml) 是控制实验的核心。以下是关键参数说明：
+pip install pyscipopt -i [https://pypi.tuna.tsinghua.edu.cn/simple](https://pypi.tuna.tsinghua.edu.cn/simple)
+降级机制：如果未安装 PySCIPOpt，MIP 任务将自动运行在 Mock 模式（使用模拟函数），仅用于流程测试，不会报错。
 
-```YAML
+C. LassoBench (用于 SVM/DNA 任务) 本项目内置了基于 scikit-learn 的原生实现适配器，无需安装 lassobench 第三方库。只要安装了 scikit-learn 即可运行。
+
+2. 数据准备 (Data Preparation)
+请确保项目根目录下存在 data/ 文件夹，并按需放置以下数据文件：
+
+Plaintext
+
+project_root/
+├── data/
+│   ├── NAS-Bench-201-v1_1-096897.pth  # [必须] 运行 NAS 任务需要
+│   ├── dna.csv                        # [可选] 运行 DNA 任务 (如缺失将使用合成数据)
+│   └── mip_instances/                 # [必须] 运行 MIP 真实求解需要
+│       ├── qiu.mps
+│       └── misc05.mps
+3. 运行实验 (Running Experiments)
+所有实验均通过入口脚本 scripts/run_experiment.py 运行，只需指定对应的配置文件。
+
+A. 运行 Rover 轨迹规划 (60D)
+描述: 60维机器人路径规划，具有几何序列依赖结构。
+
+数据: 无需额外数据（原生 NumPy 实现）。
+
+Bash
+
+python scripts/run_experiment.py --config configs/task_rover.yaml
+B. 运行 SVM 特征选择 (388D)
+描述: 基于 Breast Cancer 数据集的高维稀疏特征选择（模拟 SVM 参数调优）。
+
+数据: 使用 sklearn 内置数据集，无需额外下载。
+
+Bash
+
+python scripts/run_experiment.py --config configs/task_svm.yaml
+C. 运行 MIP 求解 (74D)
+描述: 混合整数规划参数调优（Instance: Qiu）。
+
+数据: 需要 data/mip_instances/qiu.mps。
+
+Bash
+
+python scripts/run_experiment.py --config configs/task_mip.yaml
+如果未安装 SCIP，将输出 [MIPTask] PySCIPOpt not found. Running in MOCK mode. 并继续运行。
+
+D. 运行 NAS 架构搜索 (30D)
+描述: 在 NAS-Bench-201 搜索空间中寻找最优神经网络架构。
+
+数据: 需要 data/NAS-Bench-201-v1_1-096897.pth。
+
+Bash
+
+python scripts/run_experiment.py --config configs/task_nas.yaml
+4. 配置文件指南 (Configuration Guide)
+在 configs/ 目录下创建或修改 .yaml 文件来控制实验参数。
+
+示例 1：Rover 任务配置
+YAML
+
 experiment:
-  name: "My_Experiment"       # 实验名称，决定日志文件夹名字
-  seed: 42                    # 随机种子
+  name: "Rover_60D_Test"
+  seed: 42
   device: "cuda"
 
 problem:
-  name: "stybtang_nd"         # 测试函数 (支持 stybtang, rosenbrock, ackley 等)
-  dim: 100                    # 维度
-  optimal_value: -3916.6      # [重要] 理论最优值，用于计算 Regret
-
+  type: "rover"        # 指定任务类型为 rover
+  name: "rover_60d"
+  dim: 60              # Rover 任务固定为 60维
+  
 optimization:
-  n_initial: 20               # 初始采样数
-  n_total: 300                # 总迭代数
-  switch_threshold: 50        # [关键] 多少轮后切换到自适应阶段
-  cold_start_interval: 10     # 强制重训模型的间隔
+  n_initial: 50
+  n_total: 300
+  switch_threshold: 50 # 第50轮后开启自适应结构学习
 
 algorithm:
-  decomposition_method: "friedman" # 结构学习方法: "shap" 或 "friedman"
-  background_source: "data"        # Friedman H-stat 配置: "data" 或 "uniform"
-  
-  # 阈值控制
-  interaction_threshold: 0.25      # 交互阈值 (越小越容易成组)
-  importance_threshold: 0.02       # 重要性阈值
-```
+  decomposition_method: "friedman" # 推荐使用 friedman 发现几何结构
+  decomp_freq: 25
+示例 2：MIP 任务配置
+YAML
 
-🧪 如何运行对比实验 (Benchmark Guide)
-为了在论文中展示算法性能，您通常需要对比以下三种设置。您可以通过修改 config 文件来实现。
+problem:
+  type: "mip"
+  name: "mip_qiu"
+  dim: 74
+  task_config:
+    instance: "qiu"       # 对应 data/mip_instances/qiu.mps
+    time_limit: 10.0      # SCIP 求解限时
+示例 3：Lasso/SVM 任务配置
+YAML
 
-A. 运行 Standard BO (基线)
-标准贝叶斯优化不进行结构分解，在全维空间直接建模。
+problem:
+  type: "lasso"        # Lasso, SVM, DNA 统称 lasso 类型
+  name: "svm_388d"
+  dim: 388
+  task_config:
+    dataset: "svm"     # 选项: 'svm' (388D) 或 'dna' (180D)
+5. 常见问题 (FAQ)
+Q1: 为什么日志中显示的 Regret 是 None？ A: 对于实际黑盒任务（如 MIP, NAS, SVM），我们通常无法得知理论上的全局最优值（Global Optimum）。因此无法计算 Regret。请关注日志中的 y_best (Best Observed Value)，该值越大越好（代码内部已将最小化问题转换为最大化）。
 
-设置方法：将 switch_threshold 设置为 大于等于 n_total。
+Q2: 如何添加新的任务？ A: 本项目采用了 Task Adapter 模式。
 
-原理：算法将一直停留在 Phase 1 (StdBO)，不做结构学习。
+在 src/bo_core/tasks/ 下新建任务文件（继承 BaseTask）。
 
-```YAML
-optimization:
-  n_total: 300
-  switch_threshold: 300  # <--- 设为全过程 Standard BO
-```
-B. 运行 Oracle BO (上限对照)
-假设已知真实的函数结构，强制算法使用该结构（不进行学习）。
+在 src/bo_core/tasks/__init__.py 的工厂方法中注册该任务。
 
-设置方法：在 config 中添加 oracle 字段。
+创建对应的 YAML 配置文件。
 
-原理：optimizer.py 会检测到 oracle 配置，将 fixed_decomp 设为 True，跳过结构发现步骤。
-
-```YAML
-oracle:
-  type: "block"          # 结构类型: "block" (分块) 或 "sparse" (稀疏)
-  param: 5               # 参数: block_size=5 或 effective_dim=5
-```
-
-C. 运行 Adaptive BO (本算法)
-算法自动学习结构。
-
-设置方法：设置合理的 switch_threshold (如 50)，并移除/注释掉 oracle 字段。
-
-```YAML
-optimization:
-  switch_threshold: 50   # 前50轮探索，后250轮自适应
-# oracle: ... (注释掉此部分)
-```
-
-
-📊 结果可视化 (Visualization)
-当您针对同一函数运行了多个实验（例如不同的算法，或者同一算法不同的随机种子）后，可以使用 scripts/plot_results.py 一键生成对比图。
-
-1. 数据准备
-假设您运行了以下实验，并生成了对应的日志目录：
-
-Adaptive BO: logs/Adapt_Seed1, logs/Adapt_Seed2, logs/Adapt_Seed3
-
-Standard BO: logs/Std_Seed1, logs/Std_Seed2, logs/Std_Seed3
-
-2. 绘图命令
-使用通配符 (*) 匹配目录，脚本会自动计算 均值 (Mean) 和 标准误 (Standard Error) 并绘制阴影带。
-
-```Bash
-python scripts/plot_results.py \
-  --labels "Adaptive BO" "Standard BO" \
-  --patterns "logs/Adapt_*" "logs/Std_*" \
-  --title "Stybtang 100D Performance Comparison" \
-  --output comparison_plot.png \
-  --linear  # (可选) 使用线性坐标轴，不加则默认 Log 坐标
-```
---labels: 图例名称，空格分隔。
-
---patterns: 对应的日志目录路径模式（支持 glob 通配符）。
-
-📂 项目结构说明
-```Plaintext
-bo_project/
-├── pyproject.toml           # 项目配置与依赖定义
-├── requirements.txt         # 依赖版本锁定
-├── configs/                 # 配置文件存放处
-│   └── template_full.yaml   # 全参数配置模板
-├── logs/                    # 实验结果输出 (自动生成)
-├── scripts/                 # 运行脚本
-│   ├── run_experiment.py    # 实验入口
-│   └── plot_results.py      # 绘图工具
-└── src/
-    └── bo_core/             # 核心代码包
-        ├── optimizer.py     # AdaptiveBO 主逻辑
-        ├── config_manager.py# 配置解析器
-        ├── test_functions.py# 测试函数库
-        ├── utils.py         # [遗漏补充] 通用工具 (日志、Seed、频率调度等)
-        ├── components/
-        │   ├── decomposition.py # 结构学习 (SHAP/Friedman)
-        │   ├── acquisition.py   # 并行采集函数优化
-        │   └── visualizer.py    # 绘图后端逻辑
-        └── models/
-            └── additive_gp.py   # 加性高斯过程模型
-```
-
-⚠️ 常见问题 (FAQ)
-Q: 程序运行很久后显存溢出 (OOM) 怎么办？
-
-A: 本代码已内置显存自动清理机制。如果依然 OOM，尝试在 config 中增大 cold_start_interval（减少重构频率）或检查 decomposition_finder.py 中的 Batch Size。
-
-Q: 为什么 Regret 是 None？
-
-A: 请检查配置文件中是否设置了正确的 optimal_value。如果没有理论最优值，无法计算 Regret。
-
-Q: 如何添加新的测试函数？
-
-A: 在 src/bo_core/test_functions.py 中定义函数，并在 get_function 字典中注册即可。
+Q3: 运行 NAS 任务时报错 FileNotFoundError？ A: 请检查 YAML 配置文件中 task_config.data_path 指向的路径是否正确，并确认是否已手动上传了 .pth 数据库文件。
