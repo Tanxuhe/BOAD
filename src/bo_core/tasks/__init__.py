@@ -1,13 +1,14 @@
 from typing import Any
 from .base import BaseTask
-
-# 导入具体任务 (后续批次提供的文件)
-# 为了避免循环依赖或文件未创建报错，我们使用局部导入或在 factory 中导入
-# 这里仅预留结构
+from .synthetic import SyntheticTask
+from .rover import RoverTrajectoryTask
+from .lassobench import LassoIndependentTask
+from .nas import NASTask
+from .mip import MIPTask
 
 class TaskFactory:
     """
-    任务工厂类，根据配置创建对应的 Task 实例。
+    任务工厂类：根据配置文件的 problem.type 创建对应的任务实例。
     """
     @staticmethod
     def create_task(cfg: Any) -> BaseTask:
@@ -16,31 +17,28 @@ class TaskFactory:
             cfg: FullConfig 对象
             
         Returns:
-            BaseTask 的具体子类实例
+            具体任务的实例 (继承自 BaseTask)
         """
-        # 从配置中获取任务类型
-        # 假设 config.problem.type 存在，默认为 'synthetic' 以兼容旧代码
+        # 获取任务类型，默认为 'synthetic' 以兼容旧配置
         task_type = getattr(cfg.problem, 'type', 'synthetic').lower()
         
+        print(f"[TaskFactory] Initializing task: {task_type} ...")
+        
         if task_type == 'synthetic':
-            from .synthetic import SyntheticTask
             return SyntheticTask(cfg)
             
         elif task_type == 'rover':
-            from .rover import RoverTrajectoryTask
             return RoverTrajectoryTask(cfg)
             
         elif task_type in ['svm', 'dna', 'lasso', 'lassobench']:
-            from .lassobench import LassoIndependentTask
+            # 统一由 LassoIndependentTask 处理
             return LassoIndependentTask(cfg)
             
         elif task_type == 'nas':
-            from .nas import NASTask
             return NASTask(cfg)
             
         elif task_type == 'mip':
-            from .mip import MIPTask
             return MIPTask(cfg)
             
         else:
-            raise ValueError(f"Unknown task type: {task_type}")
+            raise ValueError(f"Unknown task type: {task_type}. Supported: synthetic, rover, lasso, nas, mip")
