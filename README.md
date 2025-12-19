@@ -9,20 +9,25 @@
 ### 1.1 基础依赖
 在项目根目录下运行：
 ```bash
-pip install -r requirements.txt -i [https://pypi.tuna.tsinghua.edu.cn/simple](https://pypi.tuna.tsinghua.edu.cn/simple)
+# 1. 安装第三方依赖
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# 2. [关键] 将本项目以开发者模式安装 (Editable install)
+# 这会让系统把 src/ 目录链接到 python 的 site-packages 中
+pip install -e .
 ```
 
 ### 1.2 任务特定依赖 (按需安装)
 #### A. NAS-Bench-201 (用于 NAS 架构搜索任务)
 ```bash
-pip install nas-bench-201 -i [https://pypi.tuna.tsinghua.edu.cn/simple](https://pypi.tuna.tsinghua.edu.cn/simple)
+pip install nas-bench-201 -i -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 重要提示：代码库安装后，必须手动下载数据库文件 NAS-Bench-201-v1_1-096897.pth (约 2GB)，并上传到项目的 data/ 目录下。
 
 #### B. PySCIPOpt (用于 MIP 求解任务) MIP 任务
 依赖 SCIP 求解器。请确保系统层已安装 SCIP Suite，然后安装 Python 接口：
 ```bash
-pip install pyscipopt -i [https://pypi.tuna.tsinghua.edu.cn/simple](https://pypi.tuna.tsinghua.edu.cn/simple)
+pip install pyscipopt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 降级机制：如果未安装 PySCIPOpt，MIP 任务将自动运行在 Mock 模式（使用模拟函数），仅用于流程测试，不会报错。
 
@@ -83,6 +88,12 @@ python scripts/run_experiment.py --config configs/task_mip.yaml
 python scripts/run_experiment.py --config configs/task_nas.yaml
 ```
 
+#### E. 运行合成函数基准测试 (Synthetic Benchmarks)
+运行命令：
+```bash
+python scripts/run_experiment.py --config configs/template_full.yaml
+```
+
 ## 4. 配置文件指南 (Configuration Guide)
 在 configs/ 目录下创建或修改 .yaml 文件来控制实验参数。
 
@@ -130,4 +141,16 @@ problem:
   dim: 388
   task_config:
     dataset: "svm"     # 选项: 'svm' (388D) 或 'dna' (180D)
+```
+
+#### 示例 4：合成函数 任务配置
+
+```YAML
+problem:
+  type: "synthetic"       # [默认值] 指定为合成任务
+  name: "stybtang_nd"     # 函数名 (定义在 test_functions.py)
+  dim: 100
+  bounds_low: [-5.0]
+  bounds_high: [5.0]
+  optimal_value: 3916.6   # 理论最优值 (用于计算 Regret)
 ```
