@@ -6,22 +6,18 @@ from tqdm import tqdm
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.base import clone
 
-# 尝试导入 shap
 try:
     import shap
 except ImportError:
     pass 
 
 class BaseDecompositionFinder:
-    """
-    结构发现器基类
-    """
+    # ... (Base class unchanged) ...
     def __init__(self, X: Any, Y: Any, 
                  importance_threshold_ratio: float = 0.02,
                  interaction_threshold_ratio: float = 0.25,
                  seed: int = 42): 
         
-        # 1. 统一数据格式
         if hasattr(X, 'cpu'):
             X_np = X.cpu().numpy()
         else:
@@ -35,7 +31,6 @@ class BaseDecompositionFinder:
         else: 
             Y_np = np.array(Y).ravel()
 
-        # 2. 数据清洗
         mask = np.isfinite(Y_np)
         if not np.all(mask):
             X_np = X_np[mask]
@@ -47,7 +42,6 @@ class BaseDecompositionFinder:
         self.imp_ratio = importance_threshold_ratio
         self.int_ratio = interaction_threshold_ratio
         
-        # 3. 初始化随机森林
         self.rf_model = RandomForestRegressor(
             n_estimators=100,
             max_depth=None,
@@ -60,12 +54,9 @@ class BaseDecompositionFinder:
         raise NotImplementedError
 
 class SHAPDecompositionFinder(BaseDecompositionFinder):
-    """
-    基于 SHAP Interaction Values 的结构发现器
-    """
+    # ... (SHAP logic unchanged) ...
     def find(self) -> Tuple[List[List[int]], int]:
         model = clone(self.rf_model)
-        # SHAP 方法保留 DataFrame 训练，因为 TreeExplainer 对 DataFrame 支持较好
         model.fit(self.X_full, self.Y_full)
         
         try:
@@ -75,12 +66,9 @@ class SHAPDecompositionFinder(BaseDecompositionFinder):
             return [[i] for i in range(self.dimension)], -1
 
         shap_interaction_values = explainer.shap_interaction_values(self.X_full)
-        
-        # Global Interaction Matrix
         global_interactions = np.abs(shap_interaction_values).mean(0)
         main_effects = np.diag(global_interactions)
         
-        # Screening
         max_imp = main_effects.max() + 1e-9
         effective_dims = []
         for i in range(self.dimension):
@@ -90,14 +78,12 @@ class SHAPDecompositionFinder(BaseDecompositionFinder):
         if not effective_dims:
             effective_dims = [np.argmax(main_effects)]
             
-        # Build Graph
         G = nx.Graph()
         G.add_nodes_from(effective_dims)
         
         for i in effective_dims:
             for j in effective_dims:
                 if i >= j: continue
-                
                 interaction_val = global_interactions[i, j] * 2
                 denom = interaction_val + main_effects[i] + main_effects[j] + 1e-9
                 score = interaction_val / denom
@@ -105,7 +91,6 @@ class SHAPDecompositionFinder(BaseDecompositionFinder):
                 if score > self.int_ratio:
                     G.add_edge(i, j)
         
-        # Components
         decomposition = []
         visited = set()
         for comp in nx.connected_components(G):
@@ -114,7 +99,6 @@ class SHAPDecompositionFinder(BaseDecompositionFinder):
             visited.update(group)
             
         unimportant_group = [i for i in range(self.dimension) if i not in visited]
-        
         if unimportant_group:
             decomposition.append(unimportant_group)
             unimp_idx = len(decomposition) - 1
@@ -125,7 +109,7 @@ class SHAPDecompositionFinder(BaseDecompositionFinder):
 
 class FriedmanHDecompositionFinder(BaseDecompositionFinder):
     """
-    基于 Empirical Friedman's H-statistic 的结构发现器 (向量化修复版)
+    基于 Empirical Friedman's H-statistic 的结构发现器。
     """
     def __init__(self, X: Any, Y: Any, 
                  importance_threshold_ratio: float = 0.02,
@@ -145,14 +129,15 @@ class FriedmanHDecompositionFinder(BaseDecompositionFinder):
         T, D = X_t.shape
         B = X_bg.shape[0]
         
-        # Construct Batch (T*B, D)
+        # [优化] 使用 tile 构建大矩阵
+        # 注意: 如果 T*B 很大 (如 > 500k)，可能会导致内存压力
+        # 但相比 Python 循环，向量化预测速度快得多
         X_batch = np.tile(X_bg, (T, 1)) 
         
         for col in fix_cols:
             col_vals = np.repeat(X_t[:, col], B) 
             X_batch[:, col] = col_vals
             
-        # Predict
         max_batch = 500000 
         total_samples = X_batch.shape[0]
         
@@ -164,7 +149,6 @@ class FriedmanHDecompositionFinder(BaseDecompositionFinder):
                 end = min(start + max_batch, total_samples)
                 preds[start:end] = model.predict(X_batch[start:end])
         
-        # Aggregate
         pdp_values = preds.reshape(T, B).mean(axis=1)
         return pdp_values
 
@@ -197,12 +181,9 @@ class FriedmanHDecompositionFinder(BaseDecompositionFinder):
         X_bg = self._get_background_data(rng)
         
         model = clone(self.rf_model)
-        
-        # [关键修复] 这里使用 .values 传入 numpy array，防止 sklearn 记录 feature names
-        # 这样在后续 _compute_pdp_vectorized 中使用 numpy 预测时就不会报警告
+        # 使用 values 避免 sklearn 警告
         model.fit(self.X_full.values, self.Y_full)
         
-        # Centering for H-statistic assumption
         f_hat_raw = model.predict(X_t)
         global_mean = np.mean(f_hat_raw)
         f_hat_centered = f_hat_raw - global_mean
@@ -238,6 +219,8 @@ class FriedmanHDecompositionFinder(BaseDecompositionFinder):
             for j_idx in range(i_idx + 1, len(effective_dims)):
                 pairs.append((effective_dims[i_idx], effective_dims[j_idx]))
         
+        # [优化提示] 如果 D 很大，这里的循环会非常慢。
+        # 建议通过提高 importance_threshold 来减少 effective_dims 的数量
         for i, j in tqdm(pairs, desc="[H-Stat] Interaction", leave=False):
             pd_ij = self._compute_pdp_vectorized(model, X_t, X_bg, [i, j])
             pd_ij_centered = pd_ij - global_mean
@@ -253,7 +236,6 @@ class FriedmanHDecompositionFinder(BaseDecompositionFinder):
             if h_squared > self.int_ratio:
                 G.add_edge(i, j)
 
-        # Post-process
         decomposition = []
         visited = set()
         for comp in nx.connected_components(G):
