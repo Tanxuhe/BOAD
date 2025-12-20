@@ -1,13 +1,15 @@
 import torch
 import gpytorch
+import math
 from typing import List
 from gpytorch.kernels import ScaleKernel, RBFKernel, MaternKernel, AdditiveKernel
-from gpytorch.priors import GammaPrior
+from gpytorch.priors import GammaPrior, LogNormalPrior
 from gpytorch.means import ConstantMean
 
 class AdditiveStructureGP(gpytorch.models.ExactGP):
     """
     [Core Model] 加性高斯过程模型。
+    已集成高维自适应先验 (LogNormal Prior)。
     """
     def __init__(
         self,
@@ -17,7 +19,7 @@ class AdditiveStructureGP(gpytorch.models.ExactGP):
         decomposition: List[List[int]],
         unimportant_group_idx: int = -1,
         use_matern: bool = True,
-        lengthscale_prior_mean: float = 0.5 
+        lengthscale_prior_mean: float = 0.5  # [兼容性保留] 实际上不再使用此参数
     ):
         if train_Y.dim() > 1:
             train_Y = train_Y.squeeze()
@@ -33,20 +35,29 @@ class AdditiveStructureGP(gpytorch.models.ExactGP):
         base_kernel_class = MaternKernel if use_matern else RBFKernel
         base_kernel_kwargs = {"nu": 2.5} if use_matern else {}
         
-        ls_beta = 6.0
-        ls_alpha = lengthscale_prior_mean * ls_beta
-        
         sub_kernels = []
         device = train_X.device
 
         for i, group_dims in enumerate(decomposition):
             active_dims = torch.tensor(group_dims, dtype=torch.long, device=device)
+            group_dim_size = len(group_dims)
+            
+            # === [修改] 自适应高维先验逻辑 ===
+            # 参考论文: "Standard GP is All You Need for High-Dimensional Bayesian Optimization"
+            # Formula: mu = sqrt(2) + 0.5 * ln(D), sigma = sqrt(3)
+            # 这里的 D 是当前子组的维度
+            d_val = max(1, group_dim_size)
+            prior_mu = math.sqrt(2) + 0.5 * math.log(d_val)
+            prior_sigma = math.sqrt(3)
+            
+            ls_prior = LogNormalPrior(prior_mu, prior_sigma)
+            # ===============================
             
             # Base Kernel
             base_kernel = base_kernel_class(
-                ard_num_dims=len(group_dims), 
+                ard_num_dims=group_dim_size, 
                 active_dims=active_dims,
-                lengthscale_prior=GammaPrior(ls_alpha, ls_beta), 
+                lengthscale_prior=ls_prior, # 应用自适应先验
                 **base_kernel_kwargs
             )
             
