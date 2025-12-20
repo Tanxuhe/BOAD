@@ -3,6 +3,7 @@ import time
 import gc
 import pprint
 import numpy as np
+import math  # [新增]
 from tqdm import tqdm
 from typing import Callable, Optional
 
@@ -166,12 +167,12 @@ class AdaptiveBO:
             gc.collect()
             torch.cuda.empty_cache()
 
-        # [修复] 修正噪声先验，使其适应归一化后的数据 (Signal Var ~ 1.0)
-        # Mean = 1.1 / 20.0 = 0.055
+        # [修复] 修正噪声先验
         likelihood = gpytorch.likelihoods.GaussianLikelihood(
             noise_prior=gpytorch.priors.GammaPrior(1.1, 20.0)
         ).to(device=self.device, dtype=self.dtype)
         
+        # lengthscale_prior_mean 参数传入已无实际作用，但保留以防报错
         self.model = AdditiveStructureGP(
             train_X=X_norm, train_Y=Y_norm, likelihood=likelihood,
             decomposition=self.decomp, unimportant_group_idx=self.unimp_idx,
@@ -194,10 +195,20 @@ class AdaptiveBO:
         train_y_std = (train_y - train_y.mean()) / y_std_val
         if train_y_std.dim() == 1: train_y_std = train_y_std.unsqueeze(-1)
             
-        # [修复] 高维预热阶段强制使用 Isotropic Kernel (ARD=False)
-        # 避免 20 个样本拟合 388 个参数导致模型崩溃
+        # [修改] 高维预热阶段：使用论文推荐的 LogNormal 先验
+        full_dim = train_x.shape[1]
+        prior_mu = math.sqrt(2) + 0.5 * math.log(full_dim)
+        prior_sigma = math.sqrt(3)
+        ls_prior = gpytorch.priors.LogNormalPrior(prior_mu, prior_sigma)
+        
+        # 强制使用 Isotropic Kernel 配合强先验，保证高维下的稳健性
         covar_module = ScaleKernel(
-            MaternKernel(nu=2.5, ard_num_dims=None) # None = Isotropic
+            MaternKernel(
+                nu=2.5, 
+                ard_num_dims=None, # None = Isotropic (所有维度共享一个LS)
+                lengthscale_prior=ls_prior
+            ),
+            outputscale_prior=gpytorch.priors.GammaPrior(2.0, 0.15)
         )
         
         model = SingleTaskGP(train_x_norm, train_y_std, covar_module=covar_module)
@@ -251,7 +262,6 @@ class AdaptiveBO:
                     break
                 except: continue
             
-            # [修复] 如果 Cholesky 失败，抛出异常触发 Fail-safe
             if L is None:
                 raise RuntimeError("Cholesky decomposition failed.")
                 
@@ -267,7 +277,6 @@ class AdaptiveBO:
         
         for i, dec in enumerate(self.decomp):
             is_unimp = (i == self.unimp_idx)
-            # 放宽阈值: outputscale < 1e-4 视为无效
             if is_unimp and sub_kernels[i].outputscale.item() < 1e-4:
                 random_groups.append(dec)
             else:
@@ -364,7 +373,6 @@ class AdaptiveBO:
                 
                 cur_best = self.best_value_trace[-1]
                 
-                # Regret 计算
                 regret_val = None
                 if self.optimal_value is not None:
                     regret_val = self.optimal_value - cur_best
@@ -386,12 +394,10 @@ class AdaptiveBO:
                 self.logger.error(f"Error at {i}: {e}")
                 gc.collect()
                 
-                # [修复] 异常处理逻辑完善：必须记录日志，保持索引对齐
                 self.logger.info("   [Fail-safe] Performing random search step.")
                 X_next = torch.rand((1, self.dim), device=self.device, dtype=self.dtype) * self.x_range + self.x_min
                 
                 try:
-                    # 必须真实评估
                     Y_next = self.func(X_next).reshape(1, 1).to(self.device)
                     self.X_train = torch.cat([self.X_train, X_next], dim=0)
                     self.Y_train = torch.cat([self.Y_train, Y_next], dim=0)
@@ -400,13 +406,12 @@ class AdaptiveBO:
                     
                     cur_best = self.best_value_trace[-1]
                     
-                    # [关键修复] 写入日志，防止数据断层
                     self.json_logger.log({
                         "iter": i, 
                         "phase": "FailSafe", 
                         "y_new": Y_next.item(), 
                         "y_best": cur_best,
-                        "regret": None # 出错时不强求计算 Regret
+                        "regret": None
                     })
                     
                 except Exception as eval_e:
